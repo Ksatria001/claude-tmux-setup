@@ -26,7 +26,7 @@ render() {
     || head -n "$lines" "$f"
 }
 
-fswatch -0 \
+fswatch -0 -E \
   --latency 0.2 \
   --event Updated \
   --event Created \
@@ -38,6 +38,10 @@ fswatch -0 \
   --exclude '\.DS_Store$' \
   "$HOME" \
 | while IFS= read -r -d '' f; do
+  # Belt-and-suspenders: skip git internals and editor temp files
+  case "$f" in
+    */.git/*|*.swp|*.swo|*~) continue ;;
+  esac
   case "$f" in
     "$HOME"/Developer/*|"$HOME"/Documents/*|"$HOME"/Desktop/*)
       # Code dirs: apply extension filter

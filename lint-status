@@ -195,7 +195,7 @@ printf '\033[H\033[2J'
 printf '%s▎ lint + git%s\n' "$HDR_LINT" "$RST"
 echo "waiting for file changes..."
 
-fswatch -0 \
+fswatch -0 -E \
   --latency 0.3 \
   --event Updated \
   --event Created \
@@ -207,6 +207,10 @@ fswatch -0 \
   --exclude '\.DS_Store$' \
   "$HOME" \
 | while IFS= read -r -d '' f; do
+  # Belt-and-suspenders: skip git internals and editor temp files
+  case "$f" in
+    */.git/*|*.swp|*.swo|*~) continue ;;
+  esac
   # Same path filter as live-view
   case "$f" in
     "$HOME"/Developer/*|"$HOME"/Documents/*|"$HOME"/Desktop/*|"$HOME"/.local/bin/*) ;;
