@@ -1,0 +1,222 @@
+#!/bin/zsh
+# lint-status: companion to live-view. On file change, run an appropriate
+# linter and show git status for the file's repo. Renders into the current
+# tmux pane (designed for pane 1.3 of the claude workspace).
+
+command -v fswatch >/dev/null || { echo "lint-status: fswatch not installed"; exit 1; }
+
+[ -n "$TMUX" ] && tmux select-pane -T "lint + git"
+
+PANE="$TMUX_PANE"
+
+# Tokyo Night-ish ANSI colors
+HDR_LINT=$'\033[1;36m'   # cyan bold
+HDR_GIT=$'\033[1;33m'    # yellow bold
+DIM=$'\033[2;90m'
+OK_CLR=$'\033[0;32m'
+RST=$'\033[0m'
+
+detect_lang() {
+  local f=$1
+  case "$f" in
+    *.sh|*.bash) echo sh; return ;;
+    *.zsh)       echo zsh; return ;;
+    *.py)        echo py; return ;;
+    *.json)      echo json; return ;;
+    *.yaml|*.yml) echo yaml; return ;;
+    *.go)        echo go; return ;;
+    *.ts|*.tsx)  echo ts; return ;;
+    *.js|*.jsx)  echo js; return ;;
+    *.dart)      echo dart; return ;;
+    *.php)       echo php; return ;;
+  esac
+  # No extension — try shebang
+  local shebang
+  read -r shebang < "$f" 2>/dev/null
+  case "$shebang" in
+    '#!'*/zsh)              echo zsh; return ;;
+    '#!'*/bash|'#!'*/sh)    echo sh; return ;;
+    '#!'*python*)           echo py; return ;;
+  esac
+  echo unknown
+}
+
+lint_file() {
+  local f=$1 lang
+  lang=$(detect_lang "$f")
+  case "$lang" in
+    sh)
+      if command -v shellcheck >/dev/null; then
+        shellcheck -s bash --color=always "$f" 2>&1
+      else
+        echo "(install shellcheck for sh linting)"
+      fi
+      ;;
+    zsh)
+      # shellcheck doesn't natively support zsh — best effort, suppress common false positives
+      if command -v shellcheck >/dev/null; then
+        shellcheck -s bash --color=always --exclude=SC1071,SC2034,SC2154,SC2296 "$f" 2>&1
+      else
+        echo "(install shellcheck for zsh linting)"
+      fi
+      ;;
+    py)
+      if command -v ruff >/dev/null; then
+        ruff check --no-fix "$f" 2>&1
+      elif command -v pyflakes >/dev/null; then
+        pyflakes "$f" 2>&1
+      elif command -v python3 >/dev/null; then
+        python3 -m py_compile "$f" 2>&1 && echo "${OK_CLR}✓ syntax ok${RST}"
+      else
+        echo "(no python linter)"
+      fi
+      ;;
+    json)
+      if command -v jq >/dev/null; then
+        if jq -e . "$f" >/dev/null 2>&1; then
+          echo "${OK_CLR}✓ valid json${RST}"
+        else
+          jq . "$f" 2>&1
+        fi
+      else
+        echo "(install jq for json validation)"
+      fi
+      ;;
+    yaml)
+      # Prefer ruby (ships with macOS, yaml in stdlib); fall back to python+pyyaml
+      if command -v ruby >/dev/null; then
+        if ruby -ryaml -e 'YAML.safe_load(File.read(ARGV[0]))' "$f" 2>&1; then
+          echo "${OK_CLR}✓ valid yaml${RST}"
+        fi
+      elif command -v python3 >/dev/null && python3 -c "import yaml" 2>/dev/null; then
+        python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$f" 2>&1 \
+          && echo "${OK_CLR}✓ valid yaml${RST}"
+      else
+        echo "(install ruby or pyyaml for yaml validation)"
+      fi
+      ;;
+    go)
+      if command -v go >/dev/null; then
+        (cd "${f:h}" && go vet "./..." 2>&1) || true
+      else
+        echo "(go not installed)"
+      fi
+      ;;
+    ts|js)
+      # Look for project-local biome or eslint in any ancestor's node_modules/.bin
+      local dir=${f:h} bin="" name=""
+      while [[ "$dir" != "/" && "$dir" != "$HOME" ]]; do
+        if [[ -x "$dir/node_modules/.bin/biome" ]]; then
+          bin="$dir/node_modules/.bin/biome"; name=biome; break
+        elif [[ -x "$dir/node_modules/.bin/eslint" ]]; then
+          bin="$dir/node_modules/.bin/eslint"; name=eslint; break
+        fi
+        dir=${dir:h}
+      done
+      if [[ "$name" == biome ]]; then
+        "$bin" check --colors=force "$f" 2>&1
+      elif [[ "$name" == eslint ]]; then
+        "$bin" --color "$f" 2>&1
+      elif [[ "$lang" == js ]] && command -v node >/dev/null; then
+        local out
+        if out=$(node --check "$f" 2>&1); then
+          echo "${OK_CLR}✓ syntax ok${RST} (install eslint/biome for deeper checks)"
+        else
+          # Show just the file:line and SyntaxError lines; skip node internal traceback
+          printf '%s\n' "$out" | grep -E "(${f}:[0-9]+|^SyntaxError:)" | head -4
+        fi
+      else
+        echo "(install eslint or biome locally for ${lang} linting)"
+      fi
+      ;;
+    dart)
+      if command -v dart >/dev/null; then
+        # dart analyze on a single file works; uses project's analysis_options.yaml if present
+        dart analyze "$f" 2>&1
+      else
+        echo "(install Dart SDK)"
+      fi
+      ;;
+    php)
+      if command -v php >/dev/null; then
+        # `php -l` syntax check first; if clean, optionally run phpstan
+        local syn
+        syn=$(php -l "$f" 2>&1)
+        if [[ "$syn" == *"No syntax errors"* ]]; then
+          if command -v phpstan >/dev/null; then
+            phpstan analyze --no-progress --error-format=raw "$f" 2>&1
+          else
+            echo "${OK_CLR}✓ syntax ok${RST} (install phpstan for deeper checks)"
+          fi
+        else
+          echo "$syn"
+        fi
+      else
+        echo "(install php)"
+      fi
+      ;;
+    unknown)
+      echo "(no linter for ${f:t})"
+      ;;
+  esac
+}
+
+git_status() {
+  local f=$1 repo
+  repo=$(cd "${f:h}" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)
+  if [[ -z "$repo" ]]; then
+    echo "${DIM}(not in a git repo)${RST}"
+    return
+  fi
+  echo "${DIM}${repo/#$HOME/~}${RST}"
+  git -C "$repo" -c color.status=always status -sb 2>/dev/null
+}
+
+render() {
+  local f=$1
+  [[ -f "$f" ]] || return
+  local total half
+  total=$(tmux display-message -t "$PANE" -p '#{pane_height}' 2>/dev/null)
+  total=${total:-10}
+  # Reserve 3 rows for chrome (two headers + separator), split the rest
+  half=$(( (total - 3) / 2 ))
+  (( half < 1 )) && half=1
+
+  printf '\033[H\033[2J'
+  printf '%s▎ lint%s %s\n' "$HDR_LINT" "$RST" "${f:t}"
+  lint_file "$f" | head -n "$half"
+  printf '%s%s%s\n' "$DIM" "${(l:50::─:)}" "$RST"
+  printf '%s▎ git%s\n' "$HDR_GIT" "$RST"
+  git_status "$f" | head -n "$half"
+}
+
+# Boot banner
+printf '\033[H\033[2J'
+printf '%s▎ lint + git%s\n' "$HDR_LINT" "$RST"
+echo "waiting for file changes..."
+
+fswatch -0 \
+  --latency 0.3 \
+  --event Updated \
+  --event Created \
+  --event Renamed \
+  --exclude '(^|/)node_modules(/|$)' \
+  --exclude '(^|/)__pycache__(/|$)' \
+  --exclude '(^|/)\.git(/|$)' \
+  --exclude '(^|/)Library(/|$)' \
+  --exclude '\.DS_Store$' \
+  "$HOME" \
+| while IFS= read -r -d '' f; do
+  # Same path filter as live-view
+  case "$f" in
+    "$HOME"/Developer/*|"$HOME"/Documents/*|"$HOME"/Desktop/*|"$HOME"/.local/bin/*) ;;
+    "$HOME"/*/*) continue ;;
+    "$HOME"/*) ;;
+    *) continue ;;
+  esac
+  [[ -f "$f" ]] || continue
+  # Skip files without a recognized linter
+  lang=$(detect_lang "$f")
+  [[ "$lang" == unknown ]] && continue
+  render "$f"
+done

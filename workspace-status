@@ -1,0 +1,23 @@
+#!/bin/zsh
+# Status-line indicator for the `claude` tmux workspace.
+# Reports whether pane 1.1 (claude) and pane 1.2 (live-view) have a
+# foreground child process, using green/red dots.
+
+SESSION="claude"
+
+ok="#[fg=#9ece6a]●#[default]"
+bad="#[fg=#f7768e]●#[default]"
+
+check_pane() {
+  local pid
+  pid=$(tmux display-message -t "$SESSION:$1" -p '#{pane_pid}' 2>/dev/null)
+  # macOS pgrep -P returns nothing without a pattern; use ps for portability
+  if [[ -n "$pid" ]] && ps -A -o ppid= | grep -qE "^[[:space:]]*${pid}\$"; then
+    print -n -- "$ok"
+  else
+    print -n -- "$bad"
+  fi
+}
+
+printf '%s claude  %s live-view  %s lint' \
+  "$(check_pane 1.1)" "$(check_pane 1.2)" "$(check_pane 1.3)"

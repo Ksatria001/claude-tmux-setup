@@ -1,0 +1,66 @@
+#!/bin/zsh
+# Live-view: watch files under $HOME and render the latest changed file in
+# the current tmux pane.
+
+# Tool presence checks — fail loud on first run, not on first save
+for tool in fswatch bat; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "live-view: required tool '$tool' is not installed" >&2
+    exit 1
+  fi
+done
+
+[ -n "$TMUX" ] && tmux select-pane -T "live view"
+
+PANE="$TMUX_PANE"
+
+render() {
+  local f=$1 lines
+  # Skip if file no longer exists (e.g., the source path of a rename event)
+  [[ -f "$f" ]] || return
+  lines=$(tmux display-message -t "$PANE" -p '#{pane_height}' 2>/dev/null)
+  lines=$(( ${lines:-40} - 2 ))
+  printf '\033[H\033[2J'
+  bat --paging=never --style=numbers,header --color=always --wrap=never --theme=TwoDark "$f" 2>/dev/null \
+    | head -n "$lines" \
+    || head -n "$lines" "$f"
+}
+
+fswatch -0 \
+  --latency 0.2 \
+  --event Updated \
+  --event Created \
+  --event Renamed \
+  --exclude '(^|/)node_modules(/|$)' \
+  --exclude '(^|/)__pycache__(/|$)' \
+  --exclude '(^|/)\.git(/|$)' \
+  --exclude '(^|/)Library(/|$)' \
+  --exclude '\.DS_Store$' \
+  "$HOME" \
+| while IFS= read -r -d '' f; do
+  case "$f" in
+    "$HOME"/Developer/*|"$HOME"/Documents/*|"$HOME"/Desktop/*)
+      # Code dirs: apply extension filter
+      case "$f" in
+        *.py|*.js|*.ts|*.jsx|*.tsx|*.sh|*.zsh|*.bash|\
+*.html|*.css|*.scss|*.sass|*.json|*.yaml|*.yml|\
+*.toml|*.md|*.txt|*.rs|*.go|*.rb|*.php|\
+*.dart|*.vue|*.svelte|*.astro|\
+*.c|*.cpp|*.h|*.hpp|*.java|*.kt|*.swift|*.sql)
+          render "$f"
+          ;;
+      esac
+      ;;
+    "$HOME"/.local/bin/*)
+      # Scripts (often no extension) — render unconditionally
+      render "$f"
+      ;;
+    "$HOME"/*/*)
+      # Any other nested path under $HOME — skip
+      ;;
+    "$HOME"/*)
+      # Top-level files directly in $HOME (.zshrc, *.sh, etc.) — render
+      render "$f"
+      ;;
+  esac
+done
