@@ -1,9 +1,15 @@
 #!/bin/zsh
-# Status-line indicator for the `claude` tmux workspace.
-# Reports whether pane 1.1 (claude) and pane 1.2 (live-view) have a
-# foreground child process, using green/red dots.
+# Status-line indicator for the claude tmux workspace.
+# Reports whether pane 1.1 (claude) and pane 1.2 (live-view) and 1.3 (lint)
+# have a foreground child process, using green/red dots.
+#
+# Usage: workspace-status [session-name]
+#   - Called by tmux's status-right via `#(~/.local/bin/workspace-status #S)`
+#     so each session reports its own panes.
+#   - Defaults to "claude" if no argument is passed (back-compat for the
+#     single-session legacy setup).
 
-SESSION="claude"
+SESSION="${1:-claude}"
 
 ok="#[fg=#9ece6a]●#[default]"
 bad="#[fg=#f7768e]●#[default]"

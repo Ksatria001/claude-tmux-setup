@@ -52,12 +52,28 @@ Make sure `~/.local/bin` is on your `PATH`.
 
 ## Run
 
+### Single workspace (legacy default)
+
 ```sh
 ~/claude-workspace.sh           # attach if a `claude` session exists, else build fresh
-~/claude-workspace.sh --fresh   # kill any existing session and rebuild
+~/claude-workspace.sh --fresh   # kill the session and rebuild
 ```
 
-Run it from a terminal **outside** any existing `claude` tmux session — `--fresh` kills the session, which would terminate the Claude Code process running inside it.
+### Multiple named workspaces (one tmux session per project)
+
+```sh
+~/claude-workspace.sh omenqa ~/Developer/Projects/omenqa
+~/claude-workspace.sh tmux-setup ~/Developer/claude-tmux-setup
+~/claude-workspace.sh --fresh omenqa ~/Developer/Projects/omenqa
+```
+
+The first argument is the project name; the second (optional) is the working directory each pane starts in. Each named workspace becomes its own tmux session called `claude-<name>` with the same 3-pane layout. The status-bar dots reflect each session's own panes.
+
+Switch between sessions from inside tmux with `Ctrl-B s` (session picker) or run `tmux switch-client -t claude-<name>` directly.
+
+### Notes
+
+Run from a terminal **outside** any session you intend to `--fresh` — killing the session also kills the Claude Code process running inside it.
 
 ## Theme
 
